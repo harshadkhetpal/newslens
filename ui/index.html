@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NewsLens</title>
+<style>
+  :root {
+    --bg: #0d1117; --card: #161b22; --border: #30363d;
+    --text: #e6edf3; --text2: #8b949e; --accent: #58a6ff; --green: #3fb950;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f6f8fa; --card: #ffffff; --border: #d0d7de;
+      --text: #1f2328; --text2: #656d76; --accent: #0969da; --green: #1a7f37;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.55 -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 32px 16px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  h1 span { color: var(--accent); }
+  .sub { color: var(--text2); margin: 0 0 24px; font-size: .95rem; }
+  .bar { display: flex; gap: 8px; margin-bottom: 10px; }
+  input { flex: 1; padding: 12px 14px; font-size: 1rem; border-radius: 10px;
+          border: 1px solid var(--border); background: var(--card);
+          color: var(--text); outline: none; }
+  input:focus { border-color: var(--accent); }
+  button { padding: 12px 18px; font-size: .95rem; border-radius: 10px;
+           border: 1px solid var(--border); background: var(--card);
+           color: var(--text); cursor: pointer; white-space: nowrap; }
+  button.primary { background: var(--accent); border-color: var(--accent);
+                   color: #fff; font-weight: 600; }
+  button:disabled { opacity: .5; cursor: wait; }
+  .meta { display: flex; gap: 16px; color: var(--text2); font-size: .85rem;
+          margin-bottom: 24px; flex-wrap: wrap; }
+  .meta b { color: var(--green); }
+  .card { background: var(--card); border: 1px solid var(--border);
+          border-radius: 12px; padding: 18px 20px; margin-bottom: 14px; }
+  .answer { white-space: pre-wrap; }
+  .src { font-size: .88rem; margin-top: 6px; }
+  .src a { color: var(--accent); text-decoration: none; }
+  .src .tag { color: var(--text2); }
+  .hit-title { font-weight: 600; margin-bottom: 4px; }
+  .hit-text { color: var(--text2); font-size: .9rem; }
+  .spin { color: var(--text2); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>News<span>Lens</span></h1>
+  <p class="sub">Crawl → embed → OpenSearch hybrid retrieval → cited answers</p>
+
+  <div class="bar">
+    <input id="q" placeholder="Ask the news… e.g. What happened in AI this week?"
+           onkeydown="if(event.key==='Enter')ask()">
+    <button class="primary" id="askBtn" onclick="ask()">Ask</button>
+    <button id="searchBtn" onclick="search()">Search</button>
+  </div>
+  <div class="meta">
+    <span id="stats">index: loading…</span>
+    <span><button id="ingestBtn" onclick="ingest()"
+      style="padding:4px 10px;font-size:.8rem">↻ Ingest latest news</button></span>
+  </div>
+
+  <div id="out"></div>
+</div>
+<script>
+const out = document.getElementById('out');
+const qEl = document.getElementById('q');
+
+async function refreshStats() {
+  try {
+    const r = await (await fetch('/healthz')).json();
+    const i = r.index || {};
+    document.getElementById('stats').innerHTML =
+      `index: <b>${i.articles ?? 0}</b> articles · <b>${i.chunks ?? 0}</b> chunks` +
+      (r.ingest && r.ingest.running ? ' · <b>ingesting…</b>' : '');
+    if (r.ingest && r.ingest.running) setTimeout(refreshStats, 3000);
+  } catch { document.getElementById('stats').textContent = 'index: unreachable'; }
+}
+
+async function ingest() {
+  const btn = document.getElementById('ingestBtn');
+  btn.disabled = true;
+  await fetch('/ingest', {method:'POST', headers:{'Content-Type':'application/json'},
+                          body: JSON.stringify({per_feed: 10})});
+  setTimeout(() => { btn.disabled = false; refreshStats(); }, 2000);
+  refreshStats();
+}
+
+function busy(msg) { out.innerHTML = `<div class="card spin">${msg}</div>`; }
+function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
+
+async function ask() {
+  const q = qEl.value.trim(); if (!q) return;
+  busy('Retrieving sources and composing answer…');
+  const r = await (await fetch(`/ask?q=${encodeURIComponent(q)}`)).json();
+  let html = `<div class="card"><div class="answer">${esc(r.answer)}</div></div>`;
+  if (r.sources && r.sources.length) {
+    html += '<div class="card">' + r.sources.map(s =>
+      `<div class="src">[${s.n}] <a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>
+       <span class="tag">— ${esc(s.source)}</span></div>`).join('') + '</div>';
+  }
+  out.innerHTML = html;
+}
+
+async function search() {
+  const q = qEl.value.trim(); if (!q) return;
+  busy('Hybrid search (BM25 + vector)…');
+  const r = await (await fetch(`/search?q=${encodeURIComponent(q)}`)).json();
+  out.innerHTML = (r.hits || []).map(h =>
+    `<div class="card">
+       <div class="hit-title"><a href="${esc(h.url)}" target="_blank" rel="noopener"
+         style="color:var(--accent);text-decoration:none">${esc(h.title)}</a></div>
+       <div class="hit-text">${esc((h.text || '').slice(0, 280))}…</div>
+       <div class="src tag">${esc(h.source)} · score ${(h.score ?? 0).toFixed(2)}</div>
+     </div>`).join('') || '<div class="card spin">No results.</div>';
+}
+
+refreshStats();
+</script>
+</body>
+</html>
