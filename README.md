@@ -3,8 +3,6 @@
 Crawl live news → clean & chunk → embed locally → index into **OpenSearch**
 (BM25 + kNN vectors) → ask questions and get **cited answers**.
 
-![architecture](docs/architecture.png)
-
 ```
 RSS feeds ──▶ crawler ──▶ chunker ──▶ embedder (sentence-transformers)
                                           │
